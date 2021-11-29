@@ -1,24 +1,106 @@
 #include <DFPlayerMini_Fast.h>
-#include "SR04.h"
+#include <Adafruit_NeoPixel.h>
+#include <NewPing.h>
+
+static const bool DEBUG=false;
+
+// Neopixel inits --------------->
+#define PIN        6
+#define NUMPIXELS 16
+#define DELAYVAL 500
+Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+
+// MP3 module DFPlayer inits --------------->
 static const uint8_t PIN_MP3_TX = 11; // Connects to module's RX 
 static const uint8_t PIN_MP3_RX = 10; // Connects to module's TX 
-
 #if !defined(UBRR1H)
-#include <SoftwareSerial.h>
-SoftwareSerial mySerial(PIN_MP3_RX, PIN_MP3_TX); // RX, TX
+  #include <SoftwareSerial.h>
+  SoftwareSerial mySerial(PIN_MP3_RX, PIN_MP3_TX); // RX, TX
 #endif
-
-#define TRIG_PIN 3
-#define ECHO_PIN 2
-SR04 sr04 = SR04 (ECHO_PIN,TRIG_PIN);
-
 DFPlayerMini_Fast myMP3;
 
-const long scrollDelay = 15;   // adjust scrolling speed
-long a;
+// Ultrasonic sensor inits --------------->
+#define TRIG_PIN 3
+#define ECHO_PIN 2
+//SR04 sr04 = SR04 (ECHO_PIN,TRIG_PIN);
+#define MAX_DISTANCE 200
+NewPing sonar(TRIG_PIN, ECHO_PIN, MAX_DISTANCE);
+
+// Variables --------------->
 int minSensorDist = 20 ;
+int uS;
 long duration, distance;
 bool songPlaying;
+bool handSensedTurnOn;
+bool handSensedTurnOff;
+
+typedef struct {
+  int r;
+  int g;
+  int b;
+} rgb;
+
+const rgb fireColors[] 
+{
+  {128,17,0},
+  {182,34,3},
+  {215,53,2},
+  {252,100,0},
+  {255,117,0},
+  {250,192,0},
+  {161,1,0},
+  {254,101,13},
+  {242,60,4}
+};
+int rnd;
+
+void Print(String message)
+{
+  if (!DEBUG)
+    return;
+  Serial.println(message);
+}
+void playRandomSong(bool play)
+{
+  if (play)
+  {    
+    Print("Looping random track");
+    myMP3.playFromMP3Folder(random(1,7));
+    songPlaying = true;
+    
+  }
+  else
+  {
+    songPlaying = false;    
+    myMP3.stop();
+  }
+
+}
+
+
+void playLights(bool play)
+{
+ if (play)
+ {
+    pixels.clear();
+    for (int i=0;i < NUMPIXELS;i++)
+    {
+      Print("\n starting lights " + String(i) + "," + String(NUMPIXELS) + "," + String(fireColors[rnd].r));
+      rnd = random(0,8);    
+      pixels.setPixelColor(i, fireColors[rnd].r,fireColors[rnd].g,fireColors[rnd].b);
+      pixels.show();
+    }
+   delay(random(100,500));
+ }
+ else
+ {
+    Print("\n STOPPING lights");
+    pixels.fill((0,0,0));
+    pixels.show();  
+    delay(1000);
+ }
+}
+
 void setup() {
   
   Serial.begin(9600);
@@ -27,55 +109,81 @@ void setup() {
     mySerial.begin(9600);
     myMP3.begin(mySerial, true);
   #else
-    Serial1.begin(9600);
     myMP3.begin(Serial1, true);
   #endif  
-  // put your setup code here, to run once:
-   pinMode(TRIG_PIN, OUTPUT);
-   pinMode(ECHO_PIN, INPUT);
-   
+
+
+  pixels.begin();
    
   delay(1000);
   Serial.println("Setting volume to max");
   myMP3.reset();
   myMP3.volume(30);
   
+  
   songPlaying = false;
+  handSensedTurnOn = false;
+  handSensedTurnOff = false;
+  playLights(false);
+  playRandomSong(false);
 
+  
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  // Clears the trigPin condition
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  // Sets the trigPin HIGH (ACTIVE) for 10 microseconds
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
+  //delay(50);
+  //pixels.clear();
+  uS = sonar.ping_cm();  
+  pinMode(ECHO_PIN,OUTPUT);
 
-  // Reads the echoPin, returns the sound wave travel time in microseconds
-  duration = pulseIn(ECHO_PIN, HIGH);
-  // Calculating the distance
-  distance = duration * 0.034 / 2; // Speed of sound wave divided by 2 (go and back)
-  // Displays the distance on the Serial Monitor
-  Serial.print("Distance: ");
+  digitalWrite(ECHO_PIN,LOW);
+
+  pinMode(ECHO_PIN,INPUT);
+
+  Serial.print("Ping: ");
+  distance = uS;
   Serial.print(distance);
-  String s = String(distance);
-  Serial.println(" cm");
-  if (distance < minSensorDist) // && !songPlaying) 
+  Serial.println("cm");  
+//  if (distance == 0 && digitalRead(ECHO_PIN) == LOW) {
+//    pinMode(ECHO_PIN, OUTPUT);
+//    digitalWrite(ECHO_PIN, LOW);
+//    delay(100);
+//    Serial.println("error");
+//    pinMode(ECHO_PIN, INPUT);    
+//  }  
+  
+  if (distance > 5 && distance <= minSensorDist)
   {
-   
-    Serial.println("SCROLL NOW: Distance was " + s + " cm, Playing song ...");
-    Serial.println("Looping track 1");
-    myMP3.playFromMP3Folder(random(1,6));
-    songPlaying = true;
+    handSensedTurnOn = true;
+    handSensedTurnOff = false;
+    
   }
-  else
+  else if (handSensedTurnOn && distance <=5 && distance > 0)
   {
-    Serial.println("Song already playing");
+    handSensedTurnOff = true;
+    handSensedTurnOn = false;
+    
+  }
+ 
+  
+
+  if (handSensedTurnOn)
+  {
+    
+    if (!songPlaying)
+    {
+      Print("Distance was " + String(distance) + " cm, Playing song ...");
+      playRandomSong(true);
+    }
+    playLights(true);
   }
 
-  delay(1000);
-    
+  if (handSensedTurnOff)
+  {
+    Print("Distance was " + String(distance) + " cm, STOPPING song ...");
+    playRandomSong(false); 
+    playLights(false);
+  }
+
+
 }
